@@ -1,15 +1,17 @@
 import {
   ClerkExpressRequireAuth,
   ClerkExpressWithAuth,
-  ClerkMiddlewareOptions,
   LooseAuthProp,
+  requireAuth,
   WithAuthProp,
-  Clerk,
 } from "@clerk/clerk-sdk-node";
-import express, { Request, Response, NextFunction, RequestHandler } from "express";
-import { z } from "zod";
-import jwt from 'jsonwebtoken';
-import { zfd } from 'zod-form-data';
+import express, {
+  NextFunction,
+  Request,
+  RequestHandler,
+  Response,
+} from "express";
+import jwt from "jsonwebtoken";
 
 // Extend Express types
 declare global {
@@ -19,8 +21,8 @@ declare global {
 }
 
 // JWT Secret - in production, use a proper secret management solution
-const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-key';
-const JWT_EXPIRES_IN = '7d';
+const JWT_SECRET = process.env.JWT_SECRET || "your-super-secret-key";
+const JWT_EXPIRES_IN = "7d";
 
 // JWT Token interface
 interface JwtPayload {
@@ -32,20 +34,20 @@ interface JwtPayload {
 }
 
 // Initialize Clerk
-const clerk = new Clerk({
-  secretKey: process.env.CLERK_SECRET_KEY,
-});
+// const clerk = new Clerk({
+//   secretKey: process.env.CLERK_SECRET_KEY,
+// });
 
 // Auth schemas
-const SignUpSchema = z.object({
-  email: z.string().email('Invalid email address'),
-  password: z.string().min(8, 'Password must be at least 8 characters long'),
-  firstName: z.string().min(1, 'First name is required'),
-  lastName: z.string().optional(),
-  password: z.string().min(8),
-  firstName: z.string().min(1),
-  lastName: z.string().min(1),
-});
+// const SignUpSchema = z.object({
+//   email: z.string().email("Invalid email address"),
+//   password: z.string().min(8, "Password must be at least 8 characters long"),
+//   firstName: z.string().min(1, "First name is required"),
+//   lastName: z.string().optional(),
+//   password: z.string().min(8),
+//   firstName: z.string().min(1),
+//   lastName: z.string().min(1),
+// });
 
 // Middleware to attach user to request
 export const attachUser = async (
@@ -75,30 +77,36 @@ export const attachUser = async (
 export const jwtAuth: RequestHandler = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
-    
-    if (!authHeader?.startsWith('Bearer ')) {
-      return res.status(401).json({ message: 'No token provided' });
+
+    if (!authHeader?.startsWith("Bearer ")) {
+      return res.status(401).json({ message: "No token provided" });
     }
 
-    const token = authHeader.split(' ')[1];
+    const token = authHeader.split(" ")[1];
     const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
-    
+
     // Attach user to request
     req.auth = {
       userId: decoded.userId,
-      sessionId: '', // Not used in JWT flow
+      sessionId: "", // Not used in JWT flow
       getToken: async () => token,
-      claims: {
-        sub: decoded.userId,
-        email: decoded.email,
-        role: decoded.role
-      }
     };
-    
+
+    // req.session = {
+    //   sub: decoded.userId,
+    //   email: decoded.email,
+    //   role: decoded.role,
+    // };
+    req.authInfo = {
+      userId: decoded.userId,
+      email: decoded.email,
+      role: decoded.role,
+    };
+
     next();
   } catch (error) {
-    console.error('JWT verification failed:', error);
-    return res.status(401).json({ message: 'Invalid or expired token' });
+    console.error("JWT verification failed:", error);
+    return res.status(401).json({ message: "Invalid or expired token" });
   }
 };
 
@@ -109,101 +117,107 @@ export const optionalClerkAuth = ClerkExpressWithAuth();
 // Role-based access control middleware
 export const requireRole = (roles: string | string[]) => {
   const roleList = Array.isArray(roles) ? roles : [roles];
-  
+
   return [
     clerkAuth,
     async (req: WithAuthProp<Request>, res: Response, next: NextFunction) => {
       try {
-        const userRole = req.auth?.claims?.role;
-        
-        if (!userRole || !roleList.includes(userRole)) {
-          return res.status(403).json({ message: 'Insufficient permissions' });
+        const userRole = req.auth?.sessionClaims?.role;
+
+        if (!userRole || !roleList.includes(userRole as string)) {
+          return res.status(403).json({ message: "Insufficient permissions" });
         }
-        
+
         next();
       } catch (error) {
-        console.error('Role check failed:', error);
+        console.error("Role check failed:", error);
         next(error);
       }
-    }
+    },
   ];
 };
 
 // Auth Routes
 export const setupAuthRoutes = (app: express.Express) => {
   // JWT Login
-  app.post('/api/auth/jwt/login', async (req, res) => {
+  app.post("/api/auth/jwt/login", async (req, res) => {
     try {
       const { email, password } = req.body;
-      
+
       // In a real app, verify credentials against your database
       // This is a simplified example
       if (!email || !password) {
-        return res.status(400).json({ message: 'Email and password are required' });
+        return res
+          .status(400)
+          .json({ message: "Email and password are required" });
       }
-      
+
       // Mock user - replace with actual database lookup
-      const user = { id: '1', email, role: 'user' };
-      
+      const user = { id: "1", email, role: "user" };
+
       // Create token
       const token = jwt.sign(
         { userId: user.id, email: user.email, role: user.role },
         JWT_SECRET,
         { expiresIn: JWT_EXPIRES_IN }
       );
-      
+
       res.json({ token, user });
     } catch (error) {
-      console.error('Login error:', error);
-      res.status(500).json({ message: 'Login failed' });
+      console.error("Login error:", error);
+      res.status(500).json({ message: "Login failed" });
     }
   });
 
   // Clerk Session Check
-  app.get('/api/auth/clerk/session', clerkAuth, (req: WithAuthProp<Request>, res) => {
-    try {
-      res.json({
-        userId: req.auth.userId,
-        sessionId: req.auth.sessionId,
-        claims: req.auth.claims,
-      });
-    } catch (error) {
-      console.error('Session check failed:', error);
-      res.status(500).json({ message: 'Session check failed' });
+  app.get(
+    "/api/auth/clerk/session",
+    clerkAuth,
+    // (req: WithAuthProp<Request>, res) => {
+    (req, res) => {
+      try {
+        res.json({
+          userId: req.auth?.userId,
+          sessionId: req.auth?.sessionId,
+          claims: req.auth?.getToken,
+        });
+      } catch (error) {
+        console.error("Session check failed:", error);
+        res.status(500).json({ message: "Session check failed" });
+      }
     }
-  });
+  );
 
   // JWT Session Check
-  app.get('/api/auth/jwt/session', jwtAuth, (req, res) => {
+  app.get("/api/auth/jwt/session", jwtAuth, (req, res) => {
     try {
       res.json({
         userId: req.auth?.userId,
-        claims: req.auth?.claims,
+        claims: req.auth?.sessionId,
       });
     } catch (error) {
-      console.error('Session check failed:', error);
-      res.status(500).json({ message: 'Session check failed' });
+      console.error("Session check failed:", error);
+      res.status(500).json({ message: "Session check failed" });
     }
   });
 
   // Logout (for JWT, client should discard the token)
-  app.post('/api/auth/logout', (req, res) => {
+  app.post("/api/auth/logout", (req, res, next) => {
     // For JWT, logout is handled client-side by removing the token
     // For Clerk, the client should call Clerk's signOut()
 
-try{
+    try {
       // res.json({ message: 'Logout successful' });
-        // For now, we'll just check if the user is authenticated
-        if (!req.auth?.userId) {
-          return res.status(401).json({ error: "Unauthorized" });
-        }
-        next();
-      } catch (error) {
-        console.error("Error in requireRole middleware:", error);
-        res.status(500).json({ error: "Internal server error" });
+      // For now, we'll just check if the user is authenticated
+      if (!req.auth?.userId) {
+        return res.status(401).json({ error: "Unauthorized" });
       }
-    },
-  ];
+      next();
+    } catch (error) {
+      console.error("Error in requireRole middleware:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
 };
 
 // Setup authentication routes and middleware
@@ -217,7 +231,7 @@ export const setupAuth = (app: express.Express) => {
   });
 
   // Example protected route
-  app.get("/api/protected", requireAuth, (req, res) => {
+  app.get("/api/protected", requireAuth(app), (req, res) => {
     res.json({
       message: "This is a protected route",
       userId: req.auth?.userId,

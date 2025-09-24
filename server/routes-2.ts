@@ -17,7 +17,7 @@ import {
   insertPlaylistSchema,
 } from "@shared/schema";
 import { generateAISuggestions, tagImage } from "./openai";
-import { isAuthenticated } from "./replitAuth";
+import { isAuthenticated } from "./ignore/replitAuth";
 
 // Configure multer for file uploads
 const uploadsDir = path.join(process.cwd(), "uploads");

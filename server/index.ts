@@ -1,23 +1,28 @@
-import express, { type Request, type Response, type NextFunction, type Express } from "express";
+import express, {
+  type Request,
+  type Response,
+  type NextFunction,
+  type Express,
+} from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { healthCheck, errorHandler } from "./middleware/auth";
-import { ClerkExpressRequireAuth } from "@clerk/clerk-sdk-node";
+import { clerkAuth, setupAuthRoutes } from "./clerkAuth";
 
 // Initialize environment variables
-require('dotenv').config();
+require("dotenv").config();
 
 const app: Express = express();
 
 // Trust proxy for production
-app.set('trust proxy', true);
+app.set("trust proxy", true);
 
 // Body parsing
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
 // Health check endpoint
-app.get('/api/health', healthCheck);
+app.get("/api/health", healthCheck);
 
 // Request logging middleware
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -56,13 +61,17 @@ const startServer = async () => {
     // Register API routes
     const server = await registerRoutes(app);
 
-    // Apply Clerk authentication to all API routes except health check
-    app.use('/api', (req: Request, res: Response, next: NextFunction) => {
-      // Skip auth for health check endpoint
-      if (req.path === '/health' || req.path === '/health/') {
+    // Setup authentication routes
+    setupAuthRoutes(app);
+
+    // Apply Clerk authentication to all API routes except health check and auth endpoints
+    app.use("/api", (req: Request, res: Response, next: NextFunction) => {
+      // Skip auth for health check and auth endpoints
+      const publicPaths = ["/health", "/auth"];
+      if (publicPaths.some((path) => req.path.startsWith(path))) {
         return next();
       }
-      return ClerkExpressRequireAuth()(req, res, next);
+      return clerkAuth(req, res, next);
     });
 
     // Error handling middleware
@@ -76,12 +85,12 @@ const startServer = async () => {
     }
 
     // Start the server
-    const port = parseInt(process.env.PORT || '5000', 10);
-    server.listen(port, '0.0.0.0', () => {
+    const port = parseInt(process.env.PORT || "5000", 10);
+    server.listen(port, "0.0.0.0", () => {
       log(`Server running on port ${port}`);
     });
   } catch (error) {
-    console.error('Failed to start server:', error);
+    console.error("Failed to start server:", error);
     process.exit(1);
   }
 };

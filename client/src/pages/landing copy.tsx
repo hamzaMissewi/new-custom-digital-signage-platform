@@ -6,7 +6,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { SignInButton } from "@clerk/clerk-react";
 import { Tv, Users, Zap, BarChart3 } from "lucide-react";
 
 export default function Landing() {
@@ -25,15 +24,15 @@ export default function Landing() {
             Transform your digital signage with AI-powered content management
             and real-time playlist optimization.
           </p>
-          <SignInButton mode="modal">
-            <Button
-              size="lg"
-              className="bg-primary text-primary-foreground hover:opacity-90 px-8 py-3"
-              data-testid="button-login"
-            >
-              Get Started
-            </Button>
-          </SignInButton>
+          <Button
+            size="lg"
+            className="bg-primary text-primary-foreground hover:opacity-90 px-8 py-3"
+            // onClick={() => window.location.href = "/api/login"}
+            onClick={() => (window.location.href = "/login")}
+            data-testid="button-login"
+          >
+            Get Started
+          </Button>
         </div>
 
         {/* Features */}
@@ -164,15 +163,14 @@ export default function Landing() {
 
         {/* CTA */}
         <div className="text-center mt-16">
-          <SignInButton mode="modal">
-            <Button
-              size="lg"
-              className="bg-primary text-primary-foreground hover:opacity-90 px-8 py-3"
-              data-testid="button-login-bottom"
-            >
-              Start Free Trial
-            </Button>
-          </SignInButton>
+          <Button
+            size="lg"
+            className="bg-primary text-primary-foreground hover:opacity-90 px-8 py-3"
+            onClick={() => (window.location.href = "/api/login")}
+            data-testid="button-login-bottom"
+          >
+            Start Free Trial
+          </Button>
         </div>
       </div>
     </div>
