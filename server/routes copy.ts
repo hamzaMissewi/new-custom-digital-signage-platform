@@ -1,4 +1,4 @@
-import type { Express, Request, Response, NextFunction } from "express";
+import type { Express } from "express";
 import express from "express";
 import fs from "fs";
 import { createServer, type Server } from "http";
@@ -7,29 +7,17 @@ import path from "path";
 import { WebSocket, WebSocketServer } from "ws";
 import { storage } from "./storage";
 
-declare global {
-  namespace Express {
-    interface Request {
-      auth?: {
-        userId: string;
-        sessionId: string;
-        getToken: () => Promise<string | null>;
-      };
-      file?: Express.Multer.File;
-    }
-  }
-}
-
 // Store active WebSocket connections for screens
 const screenConnections = new Map<string, WebSocket>();
 
-import { requireAuth, optionalAuth, requireRole } from "./middleware/auth";
+// Authentication removed
 import {
   insertBroadcastSchema,
   insertPlaylistItemSchema,
   insertPlaylistSchema,
 } from "@shared/schema";
 import { generateAISuggestions, tagImage } from "./openai";
+import { isAuthenticated } from "./replitAuth";
 
 // Configure multer for file uploads
 const uploadsDir = path.join(process.cwd(), "uploads");
@@ -59,28 +47,15 @@ const upload = multer({
 
 // WebSocket connections for real-time updates
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Apply authentication middleware to protected routes
-  app.use("/api/protected", requireAuth);
-
-  // Apply role-based access control
-  app.use("/api/admin", requireRole("admin"));
+  // Authentication removed
 
   // Auth routes
-  app.get("/api/auth/user", requireAuth, (req: Request, res: Response) => {
-    res.json({
-      userId: req.auth?.userId,
-      sessionId: req.auth?.sessionId,
-      // Add any other user information you need from Clerk
-    });
-  });
+  // Authentication routes removed
 
-  app.get("/api/stats", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/stats", async (req: any, res) => {
+    // All routes are now public, async (req: any, res) => {
     try {
-      if (!req.auth?.userId) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-
-      const user = await storage.getUser(req.auth.userId);
+      const user = await storage.getUser(req.user.claims.sub);
       if (!user?.organizationId) {
         return res
           .status(400)
@@ -90,23 +65,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const media = await storage.getMedia(user.organizationId);
       res.json(media);
     } catch (error) {
+      // console.error("Error updating screen:", error);
+      // res.status(500).json({ message: "Failed to update screen" });
       console.error("Error fetching media:", error);
       res.status(500).json({ message: "Failed to fetch media" });
     }
   });
 
-  // Media upload endpoint
   app.post(
     "/api/media/upload",
-    requireAuth,
+    isAuthenticated,
     upload.single("file"),
-    async (req: Request, res: Response) => {
+    async (req: any, res) => {
       try {
-        if (!req.auth?.userId) {
-          return res.status(401).json({ message: "Unauthorized" });
-        }
-
-        const user = await storage.getUser(req.auth.userId);
+        const user = await storage.getUser(req.user.claims.sub);
         if (!user?.organizationId) {
           return res
             .status(400)
@@ -168,7 +140,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use("/uploads", express.static(uploadsDir));
 
   // Playlist routes
-  app.get("/api/playlists", async (req: any, res) => {
+  app.get("/api/playlists", isAuthenticated, async (req: any, res) => {
     try {
       const user = await storage.getUser(req.user.claims.sub);
       if (!user?.organizationId) {
@@ -185,7 +157,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/playlists/:id", async (req: any, res) => {
+  app.get("/api/playlists/:id", isAuthenticated, async (req: any, res) => {
     try {
       const playlist = await storage.getPlaylistWithItems(req.params.id);
       if (!playlist) {
@@ -198,155 +170,157 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post(
-    "/api/playlists",
-    requireAuth,
-    async (req: Request, res: Response) => {
-      try {
-        if (!req.auth?.userId) {
-          return res.status(401).json({ message: "Unauthorized" });
-        }
+  app.post("/api/playlists", isAuthenticated, async (req: any, res) => {
+    try {
+      const user = await storage.getUser(req.user.claims.sub);
+      if (!user?.organizationId) {
+        return res
+          .status(400)
+          .json({ message: "User not associated with organization" });
+      }
 
-        const user = await storage.getUser(req.auth.userId);
+      const validatedData = insertPlaylistSchema.parse({
+        ...req.body,
+        organizationId: user.organizationId,
+        createdById: user.id,
+      });
+
+      const playlist = await storage.createPlaylist(validatedData);
+
+      // Audit log
+      await storage.createAuditLog({
+        action: "create",
+        entityType: "playlist",
+        entityId: playlist.id,
+        userId: user.id,
+        organizationId: user.organizationId,
+        metadata: { name: playlist.name },
+      });
+
+      res.json(playlist);
+    } catch (error) {
+      console.error("Error creating playlist:", error);
+      res.status(500).json({ message: "Failed to create playlist" });
+    }
+  });
+
+  app.post(
+    "/api/playlists/:id/items",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const user = await storage.getUser(req.user.claims.sub);
         if (!user?.organizationId) {
           return res
             .status(400)
             .json({ message: "User not associated with organization" });
         }
 
-        const validatedData = insertPlaylistSchema.parse({
+        const validatedData = insertPlaylistItemSchema.parse({
           ...req.body,
-          organizationId: user.organizationId,
+          playlistId: req.params.id,
         });
 
-        const playlist = await storage.createPlaylist(validatedData);
-
-        // Audit log
-        await storage.createAuditLog({
-          action: "create",
-          entityType: "playlist",
-          entityId: playlist.id,
-          userId: user.id,
-          organizationId: user.organizationId,
-          metadata: { name: playlist.name },
-        });
-
-        res.json(playlist);
+        const item = await storage.addPlaylistItem(validatedData);
+        res.json(item);
       } catch (error) {
-        console.error("Error creating playlist:", error);
-        res.status(500).json({ message: "Failed to create playlist" });
+        console.error("Error adding playlist item:", error);
         res.status(500).json({ message: "Failed to add playlist item" });
       }
     }
   );
 
   // AI suggestions route
-  app.post(
-    "/api/ai/suggestions",
-    requireAuth,
-    async (req: Request, res: Response) => {
-      try {
-        if (!req.auth?.userId) {
-          return res.status(401).json({ message: "Unauthorized" });
-        }
-
-        const user = await storage.getUser(req.auth.userId);
-        if (!user?.organizationId) {
-          return res
-            .status(400)
-            .json({ message: "User not associated with organization" });
-        }
-
-        const { context, timeOfDay, audienceType } = req.body;
-        const suggestions = await generateAISuggestions(
-          context,
-          timeOfDay,
-          audienceType
-        );
-        res.json(suggestions);
-      } catch (error) {
-        console.error("Error generating AI suggestions:", error);
-        res.status(500).json({ message: "Failed to generate suggestions" });
+  app.post("/api/ai/suggestions", isAuthenticated, async (req: any, res) => {
+    try {
+      const user = await storage.getUser(req.user.claims.sub);
+      if (!user?.organizationId) {
+        return res
+          .status(400)
+          .json({ message: "User not associated with organization" });
       }
+
+      const { context, timeOfDay, audienceType } = req.body;
+      const suggestions = await generateAISuggestions(
+        context,
+        timeOfDay,
+        audienceType
+      );
+      res.json(suggestions);
+    } catch (error) {
+      console.error("Error generating AI suggestions:", error);
+      res.status(500).json({ message: "Failed to generate suggestions" });
     }
-  );
+  });
 
   // Broadcast routes
-  app.post(
-    "/api/broadcasts",
-    requireAuth,
-    async (req: Request, res: Response) => {
-      try {
-        if (!req.auth?.userId) {
-          return res.status(401).json({ message: "Unauthorized" });
-        }
-
-        const user = await storage.getUser(req.auth.userId);
-        if (!user?.organizationId) {
-          return res
-            .status(400)
-            .json({ message: "User not associated with organization" });
-        }
-
-        const validatedData = insertBroadcastSchema.parse({
-          ...req.body,
-          organizationId: user.organizationId,
-          createdById: user.id,
-        });
-
-        const broadcast = await storage.createBroadcast(validatedData);
-
-        // Get playlist data
-        const playlist = await storage.getPlaylistWithItems(
-          validatedData.playlistId
-        );
-        if (!playlist) {
-          return res.status(404).json({ message: "Playlist not found" });
-        }
-
-        // Send to connected screens
-        const message = JSON.stringify({
-          type: "LOAD_PLAYLIST",
-          payload: {
-            playlist,
-            broadcastId: broadcast.id,
-          },
-        });
-
-        validatedData.screenIds.forEach((screenId) => {
-          const screen = screenConnections.get(screenId);
-          if (screen && screen.readyState === WebSocket.OPEN) {
-            screen.send(message);
-          }
-        });
-
-        // Update broadcast status
-        await storage.updateBroadcast(broadcast.id, {
-          status: "broadcasting",
-          startedAt: new Date(),
-        });
-
-        // Audit log
-        await storage.createAuditLog({
-          action: "broadcast",
-          entityType: "playlist",
-          entityId: validatedData.playlistId,
-          userId: user.id,
-          organizationId: user.organizationId,
-          metadata: {
-            broadcastId: broadcast.id,
-            screenIds: validatedData.screenIds,
-            playlistName: playlist.name,
-          },
-        });
-
-        res.json(broadcast);
-      } catch (error) {
-        console.error("Error creating broadcast:", error);
-        res.status(500).json({ message: "Failed to create broadcast" });
+  app.post("/api/broadcasts", isAuthenticated, async (req: any, res) => {
+    try {
+      const user = await storage.getUser(req.user.claims.sub);
+      if (!user?.organizationId) {
+        return res
+          .status(400)
+          .json({ message: "User not associated with organization" });
       }
+
+      const validatedData = insertBroadcastSchema.parse({
+        ...req.body,
+        organizationId: user.organizationId,
+        createdById: user.id,
+      });
+
+      const broadcast = await storage.createBroadcast(validatedData);
+
+      // Get playlist data
+      const playlist = await storage.getPlaylistWithItems(
+        validatedData.playlistId
+      );
+      if (!playlist) {
+        return res.status(404).json({ message: "Playlist not found" });
+      }
+
+      // Send to connected screens
+      const message = JSON.stringify({
+        type: "LOAD_PLAYLIST",
+        payload: {
+          playlist,
+          broadcastId: broadcast.id,
+        },
+      });
+
+      validatedData.screenIds.forEach((screenId) => {
+        const screen = screenConnections.get(screenId);
+        if (screen && screen.readyState === WebSocket.OPEN) {
+          screen.send(message);
+        }
+      });
+
+      // Update broadcast status
+      await storage.updateBroadcast(broadcast.id, {
+        status: "broadcasting",
+        startedAt: new Date(),
+      });
+
+      // Audit log
+      await storage.createAuditLog({
+        action: "broadcast",
+        entityType: "playlist",
+        entityId: validatedData.playlistId,
+        userId: user.id,
+        organizationId: user.organizationId,
+        metadata: {
+          broadcastId: broadcast.id,
+          screenIds: validatedData.screenIds,
+          playlistName: playlist.name,
+        },
+      });
+
+      res.json(broadcast);
+    } catch (error) {
+      console.error("Error creating broadcast:", error);
+      res.status(500).json({ message: "Failed to create broadcast" });
     }
-  );
+  });
 
   // Player connection route
   app.post("/api/player/connect", async (req, res) => {
